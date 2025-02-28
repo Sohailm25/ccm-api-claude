@@ -14,8 +14,9 @@ import sqlalchemy
 import requests
 from bs4 import BeautifulSoup
 from newspaper import Article
+import traceback
 
-from database import get_db, Entry, Embedding, SessionLocal
+from database import get_db, Entry, Embedding, SessionLocal, reset_db_connection
 from embeddings import get_embedding, search_entries
 from claude_integration import get_search_response, get_weekly_rollup_response, get_youtube_transcript_summary, is_youtube_url
 
@@ -208,16 +209,41 @@ def search_content(
     Search for entries using semantic similarity.
     Returns Claude's interpretation of the results.
     """
-    # Get semantically similar entries
-    results = search_entries(db, query, limit)
-    
-    # Get Claude's response about the search results
-    claude_response = get_search_response(query, results)
-    
-    return {
-        "claude_response": claude_response,
-        "entries": results
-    }
+    try:
+        # Get semantically similar entries
+        results = search_entries(db, query, limit)
+        
+        # Get Claude's response about the search results
+        claude_response = get_search_response(query, results)
+        
+        return {
+            "claude_response": claude_response,
+            "entries": results
+        }
+    except Exception as e:
+        # Log the error and return a fallback response
+        logger.error(f"Search error: {e}")
+        
+        # Always roll back on error to prevent transaction issues
+        db.rollback()
+        
+        # Get recent entries as fallback
+        fallback_entries = db.query(Entry).order_by(Entry.created_at.desc()).limit(limit).all()
+        fallback_results = [
+            {
+                "id": entry.id,
+                "url": entry.url,
+                "content": entry.content,
+                "thoughts": entry.thoughts,
+                "created_at": entry.created_at,
+                "similarity": 0.0
+            } for entry in fallback_entries
+        ]
+        
+        return {
+            "claude_response": f"I encountered an error while searching: {str(e)}. Here are your most recent entries instead.",
+            "entries": fallback_results
+        }
 
 @app.get("/weekly-rollup", response_model=WeeklyRollupResponse)
 def get_weekly_rollup(
@@ -236,8 +262,8 @@ def get_weekly_rollup(
     try:
         # Get entries from the past week
         entries = db.query(Entry).filter(
-            Entry.created_date >= start_date,
-            Entry.created_date <= end_date
+            Entry.created_at >= start_date,
+            Entry.created_at <= end_date
         ).all()
         
         # If no entries, return a message
@@ -282,8 +308,26 @@ def get_weekly_rollup(
 
 @app.get("/health")
 def health_check():
-    """Simple health check endpoint"""
-    return {"status": "healthy"}
+    """Check if the API is running and connections are working"""
+    try:
+        # Test database connection
+        with SessionLocal() as db:
+            db.execute(sqlalchemy.text("SELECT 1"))
+        
+        # Test vector functionality
+        vector_working = reset_db_connection()
+        
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "vector_extension": "working" if vector_working else "not working"
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
 
 def generate_and_store_embedding(entry_id: int, text: str):
     try:
@@ -311,13 +355,19 @@ async def startup_db_client():
         # Don't raise here - let the app start and fail gracefully
 
 def extract_url_content(url: str) -> dict:
-    """
-    Extract content from a URL and return a structured dictionary.
-    Works for general websites, news articles, and falls back to YouTube extraction when applicable.
-    """
+    """Extract content from a URL and return a structured dictionary."""
     try:
+        # Handle Twitter/X.com links
+        if "twitter.com" in url or "x.com" in url:
+            return {
+                "content": "This is a tweet. Refer to thoughts or visit link directly.",
+                "title": "Twitter/X Post",
+                "success": True
+            }
+            
         # First check if it's a YouTube URL and handle accordingly
         if is_youtube_url(url):
+            logger.info(f"Extracting YouTube transcript for {url}")
             summary = get_youtube_transcript_summary(url)
             return {
                 "content": summary,
@@ -325,67 +375,90 @@ def extract_url_content(url: str) -> dict:
                 "success": True
             }
         
-        # For general websites, use newspaper3k for extraction
-        article = Article(url)
-        article.download()
-        article.parse()
+        # Try Trafilatura first (you'd need to install this)
+        try:
+            import trafilatura
+            downloaded = trafilatura.fetch_url(url)
+            if downloaded:
+                content = trafilatura.extract(downloaded)
+                if content and len(content.strip()) > 100:
+                    metadata = trafilatura.extract_metadata(downloaded)
+                    title = metadata.title if metadata and metadata.title else url
+                    logger.info(f"Successfully extracted with Trafilatura: {title}")
+                    return {
+                        "content": content,
+                        "title": title,
+                        "success": True
+                    }
+        except Exception as te:
+            logger.error(f"Trafilatura extraction failed for {url}: {te}")
         
-        # If it's an article, it might have a title and text
-        if article.text and len(article.text.strip()) > 100:
-            # Get title if available, otherwise use URL
-            title = article.title if article.title else url
+        # Fall back to newspaper3k
+        logger.info(f"Attempting to extract content from {url} using newspaper3k")
+        try:
+            article = Article(url)
+            article.download()
+            article.parse()
+            
+            # If it's an article, it might have a title and text
+            if article.text and len(article.text.strip()) > 100:
+                # Get title if available, otherwise use URL
+                title = article.title if article.title else url
+                logger.info(f"Successfully extracted content using newspaper3k: {title}")
+                return {
+                    "content": article.text,
+                    "title": title,
+                    "success": True
+                }
+        except Exception as ne:
+            logger.error(f"Newspaper3k extraction failed for {url}: {ne}")
+            # Continue to fallback
+            
+        # Fallback to basic HTML scraping if newspaper extraction isn't satisfactory
+        logger.info(f"Falling back to BeautifulSoup for {url}")
+        try:
+            response = requests.get(
+                url, 
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                },
+                timeout=15
+            )
+            response.raise_for_status()  # Check for HTTP errors
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Extract the main text content, prioritizing article content
+            content = ""
+            
+            # Try to find the main content
+            for tag in ['article', 'main', 'div[role="main"]', '.content', '#content']:
+                main_content = soup.select(tag)
+                if main_content:
+                    content = main_content[0].get_text(separator='\n', strip=True)
+                    logger.info(f"Found content using selector: {tag}")
+                    break
+            
+            # If no specific content container found, get the body content
+            if not content:
+                logger.info("No content container found, extracting from body")
+                content = soup.body.get_text(separator='\n', strip=True)
+                
+            # Get title
+            title = soup.title.string if soup.title else url
+            
+            logger.info(f"Successfully extracted content using BeautifulSoup: {title}")
             return {
-                "content": article.text,
+                "content": content,
                 "title": title,
                 "success": True
             }
+        except requests.exceptions.RequestException as re:
+            logger.error(f"Request error for {url}: {re}")
+            raise
             
-        # Fallback to basic HTML scraping if newspaper extraction isn't satisfactory
-        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Extract the main text content, prioritizing article content
-        content = ""
-        
-        # Try to find the main content
-        for tag in ['article', 'main', 'div[role="main"]', '.content', '#content']:
-            main_content = soup.select(tag)
-            if main_content:
-                content = main_content[0].get_text(separator='\n', strip=True)
-                break
-        
-        # If no specific content container found, get the body content
-        if not content:
-            content = soup.body.get_text(separator='\n', strip=True)
-            
-        # Get title
-        title = soup.title.string if soup.title else url
-            
-        # Use Claude to summarize if content is too long
-        if len(content) > 5000:
-            summary_prompt = f"""
-            Please summarize the following content from {url} in a concise way, 
-            preserving the key information and main points:
-            
-            {content[:10000]}  # Truncate if extremely long
-            """
-            
-            response = client.messages.create(
-                model="claude-3-7-sonnet-20250219",
-                max_tokens=1000,
-                messages=[{"role": "user", "content": summary_prompt}]
-            )
-            
-            content = f"## AI-Generated Summary from {title}\n\n{response.content[0].text}"
-            
-        return {
-            "content": content,
-            "title": title,
-            "success": True
-        }
-    
     except Exception as e:
-        logging.error(f"Error extracting content from URL {url}: {e}")
+        logger.error(f"Error extracting content from URL {url}: {e}", exc_info=True)
         return {
             "content": f"[No content extracted] URL: {url}",
             "title": url,
@@ -444,6 +517,78 @@ def create_from_url(
     )
     
     return db_entry
+
+@app.get("/test-extract")
+def test_extract(
+    url: str,
+    api_key: APIKey = Depends(get_api_key),
+):
+    """
+    Test URL extraction without saving to database.
+    Returns detailed diagnostics about the extraction process.
+    """
+    start_time = time.time()
+    
+    try:
+        # Try with newspaper3k
+        newspaper_result = {"success": False, "error": None, "title": None, "content_length": 0}
+        try:
+            article = Article(url)
+            article.download()
+            article.parse()
+            newspaper_result = {
+                "success": True,
+                "title": article.title,
+                "content_length": len(article.text),
+                "error": None
+            }
+        except Exception as e:
+            newspaper_result["error"] = str(e)
+        
+        # Try with BeautifulSoup
+        bs_result = {"success": False, "error": None, "title": None, "content_length": 0}
+        try:
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            soup = BeautifulSoup(response.text, 'html.parser')
+            content = ""
+            title = soup.title.string if soup.title else url
+            
+            for tag in ['article', 'main', 'div[role="main"]', '.content', '#content']:
+                main_content = soup.select(tag)
+                if main_content:
+                    content = main_content[0].get_text(separator='\n', strip=True)
+                    break
+            
+            if not content and soup.body:
+                content = soup.body.get_text(separator='\n', strip=True)
+                
+            bs_result = {
+                "success": len(content) > 100,
+                "title": title,
+                "content_length": len(content),
+                "error": None if len(content) > 100 else "Insufficient content extracted"
+            }
+        except Exception as e:
+            bs_result["error"] = str(e)
+            
+        # Complete result
+        extraction = extract_url_content(url)
+        
+        return {
+            "url": url,
+            "newspaper3k_test": newspaper_result,
+            "beautifulsoup_test": bs_result,
+            "combined_result": extraction,
+            "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+            "is_youtube": is_youtube_url(url)
+        }
+    except Exception as e:
+        return {
+            "url": url,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "processing_time_ms": round((time.time() - start_time) * 1000, 2)
+        }
 
 if __name__ == "__main__":
     import uvicorn

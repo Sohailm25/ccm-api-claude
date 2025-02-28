@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir newspaper3k==0.2.8
 RUN pip install --no-cache-dir youtube-transcript-api==0.6.1
 
 # Pre-download sentence transformers model to avoid timeout during startup
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-MiniLM-L3-v2')"
 
 # Copy application code
 COPY . .
@@ -33,4 +33,7 @@ COPY . .
 CMD python -c "from database import create_tables; create_tables()" && uvicorn main:app --host 0.0.0.0 --port $PORT
 
 # After installing requirements
-RUN pip install --no-cache-dir anthropic==0.8.1 
+RUN pip install --no-cache-dir anthropic==0.8.1
+
+# Add trafilatura installation
+RUN pip install --no-cache-dir trafilatura 

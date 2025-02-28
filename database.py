@@ -50,21 +50,29 @@ class Embedding(Base):
 def create_tables():
     global engine
     with engine.connect() as conn:
+        # Begin a transaction
+        trans = conn.begin()
         try:
             # Create vector extension
             conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector;"))
-            conn.commit()
+            # Commit explicitly
+            trans.commit()
             logging.info("Vector extension created successfully")
         except Exception as e:
+            # Roll back on error
+            trans.rollback()
             logging.error(f"Error creating vector extension: {e}")
-            conn.rollback()
             # Continue anyway - tables might still work
-            
+        
+        # Start a new transaction for table creation
+        trans = conn.begin()
         try:
             # Create tables
             Base.metadata.create_all(bind=engine)
+            trans.commit()
             logging.info("Database tables created successfully")
         except Exception as e:
+            trans.rollback()
             logging.error(f"Error creating tables: {e}")
             raise
 
@@ -74,4 +82,38 @@ def get_db():
     try:
         yield db
     finally:
-        db.close() 
+        db.close()
+
+def reset_db_connection():
+    """Reset database connection and verify pgvector is installed"""
+    global engine
+    with engine.connect() as conn:
+        try:
+            # Check if vector extension exists
+            result = conn.execute(sqlalchemy.text(
+                "SELECT extname FROM pg_extension WHERE extname = 'vector'"))
+            extension_exists = result.scalar() is not None
+            
+            if not extension_exists:
+                # Try to create if not exists
+                trans = conn.begin()
+                try:
+                    conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector;"))
+                    trans.commit()
+                    logging.info("Vector extension created during reset")
+                except Exception as e:
+                    trans.rollback()
+                    logging.error(f"Failed to create vector extension: {e}")
+            
+            # Test a simple vector operation to verify functioning
+            try:
+                conn.execute(sqlalchemy.text("SELECT '{1,2,3}'::vector"))
+                logging.info("Vector operations working correctly")
+                return True
+            except Exception as e:
+                logging.error(f"Vector operations not working: {e}")
+                return False
+                
+        except Exception as e:
+            logging.error(f"Database connection reset failed: {e}")
+            return False 

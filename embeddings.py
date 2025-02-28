@@ -17,16 +17,19 @@ def search_entries(db: Session, query: str, limit: int = 5) -> List[Dict[str, An
     query_embedding = get_embedding(query)
     
     try:
-        # Try pgvector's <-> operator first
+        # Convert embedding to string format PostgreSQL understands
+        embedding_str = str(query_embedding).replace('[', '{').replace(']', '}')
+        
+        # Use direct string interpolation for vector (safe here because we control the input)
         result = db.execute(
-            text("""
+            text(f"""
             SELECT 
                 e.id, 
                 e.url, 
                 e.content, 
                 e.thoughts, 
                 e.created_at,
-                1 - (emb.embedding <-> :query_embedding::vector) AS similarity
+                1 - (emb.embedding <-> '{embedding_str}'::vector) AS similarity
             FROM 
                 entries e
             JOIN 
@@ -36,7 +39,6 @@ def search_entries(db: Session, query: str, limit: int = 5) -> List[Dict[str, An
             LIMIT :limit
             """),
             {
-                "query_embedding": query_embedding,
                 "limit": limit
             }
         )
@@ -57,6 +59,9 @@ def search_entries(db: Session, query: str, limit: int = 5) -> List[Dict[str, An
     except Exception as e:
         # Fallback to a simple query without vector search
         logging.error(f"Vector search failed: {e}")
+        
+        # Roll back transaction to prevent 'transaction aborted' errors
+        db.rollback()
         
         # Just return the most recent entries as fallback
         result = db.query(Entry).order_by(Entry.created_at.desc()).limit(limit).all()
