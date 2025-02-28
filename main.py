@@ -23,7 +23,7 @@ import trafilatura
 import anthropic
 from content_processor import format_and_summarize_content
 
-from database import get_db, Entry, Embedding, SessionLocal, reset_db_connection
+from database import get_db, Entry, Embedding, SessionLocal, reset_db_connection, generate_and_store_embedding, convert_to_pg_vector
 from embeddings import get_embedding, search_entries
 from claude_integration import get_search_response, get_weekly_rollup_response, get_youtube_transcript_summary, is_youtube_url
 
@@ -338,123 +338,6 @@ def health_check():
         return {
             "status": "unhealthy",
             "error": str(e)
-        }
-
-def generate_and_store_embedding(entry_id: int, text: str):
-    try:
-        # Create a new session for background task
-        db = SessionLocal()
-        embedding_vector = get_embedding(text)
-        db_embedding = Embedding(entry_id=entry_id, embedding=embedding_vector)
-        db.add(db_embedding)
-        db.commit()
-    except Exception as e:
-        logger.error(f"Error generating embedding: {e}")
-    finally:
-        db.close()
-
-@app.on_event("startup")
-async def startup_db_client():
-    try:
-        from database import engine
-        # Test the connection
-        with engine.connect() as conn:
-            conn.execute(sqlalchemy.text("SELECT 1"))
-        logger.info("Successfully connected to the database")
-    except Exception as e:
-        logger.error(f"Failed to connect to the database: {e}")
-        # Don't raise here - let the app start and fail gracefully
-
-def extract_with_bs4(url):
-    """Extract content from URLs with appropriate handler for each type"""
-    # Handle Twitter/X.com links
-    if "twitter.com" in url or "x.com" in url:
-        return {
-            "content": "",  # Empty content field for Twitter/X
-            "title": "Twitter/X Post",
-            "success": True
-        }
-        
-    # Handle YouTube URLs using youtube-transcript-api
-    if is_youtube_url(url):
-        try:
-            summary = get_youtube_transcript_summary(url)
-            return {
-                "content": summary,
-                "title": "YouTube Video Summary",
-                "success": True
-            }
-        except Exception as e:
-            logger.error(f"YouTube extraction failed: {e}")
-            return {
-                "content": "Failed to extract YouTube transcript.",
-                "title": "YouTube Video",
-                "success": False
-            }
-    
-    # For regular websites, try extraction methods
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    
-    try:
-        # Try with simplified BeautifulSoup first, so we have a fallback
-        response = requests.get(url, headers=headers, timeout=EXTRACTION_TIMEOUT)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Get title
-        title = soup.title.string if soup.title else url
-        
-        # Try with Trafilatura if available
-        trafilatura_content = None
-        try:
-            downloaded = trafilatura.fetch_url(url)
-            if downloaded:
-                trafilatura_content = trafilatura.extract(downloaded)
-                if trafilatura_content and len(trafilatura_content.strip()) > 100:
-                    metadata = trafilatura.extract_metadata(downloaded)
-                    if metadata and metadata.title:
-                        title = metadata.title
-        except Exception as trafilatura_error:
-            logger.info(f"Trafilatura extraction failed: {trafilatura_error}")
-            trafilatura_content = None
-        
-        # If trafilatura worked, use that content
-        if trafilatura_content:
-            content = trafilatura_content
-        else:
-            # Extract content with BeautifulSoup
-            content = ""
-            for tag in ['article', 'main', '.content', '#content', 'div.post', 'div.entry']:
-                elements = soup.select(tag)
-                if elements:
-                    content = elements[0].get_text(separator='\n', strip=True)
-                    break
-            
-            # Fallback to body if no specific content container found
-            if not content and soup.body:
-                content = soup.body.get_text(separator='\n', strip=True)
-            
-        # If we extracted content, process it with Claude
-        if content and len(content) > 100:
-            processed_content = format_and_summarize_content(content, url, title)
-            return {
-                "content": processed_content,
-                "title": title,
-                "success": True
-            }
-            
-        return {
-            "content": content,
-            "title": title,
-            "success": bool(content)
-        }
-    except Exception as e:
-        logger.error(f"Extraction error for {url}: {e}")
-        return {
-            "content": f"Extraction failed: {str(e)}",
-            "title": url,
-            "success": False
         }
 
 @app.post("/extract", response_model=EntryResponse)

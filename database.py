@@ -10,6 +10,7 @@ from pgvector.sqlalchemy import Vector
 import sqlalchemy
 import logging
 import contextlib
+from embeddings import get_embedding
 
 # Import from config
 from config import DATABASE_URL, DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_TIMEOUT, DB_POOL_RECYCLE, LOG_LEVEL
@@ -121,4 +122,39 @@ def reset_db_connection():
                 
     except Exception as e:
         logger.error(f"Database connection reset failed: {e}")
-        return False 
+        return False
+
+# Add this function to properly handle vector conversion
+def convert_to_pg_vector(embedding):
+    """Convert embedding to proper pgvector format"""
+    if embedding is None:
+        return None
+    
+    # If embedding is numpy array, convert to list
+    if hasattr(embedding, 'tolist'):
+        embedding = embedding.tolist()
+    
+    # Ensure all values are floats
+    try:
+        embedding = [float(val) for val in embedding]
+    except (TypeError, ValueError) as e:
+        logger.error(f"Error converting embedding values to float: {e}")
+        return None
+    
+    return embedding
+
+# Update generate_and_store_embedding function
+def generate_and_store_embedding(entry_id: int, text: str):
+    try:
+        # Create a new session for background task
+        db = SessionLocal()
+        embedding_vector = get_embedding(text)
+        # Convert to proper pgvector format
+        pg_vector = convert_to_pg_vector(embedding_vector)
+        db_embedding = Embedding(entry_id=entry_id, vector=pg_vector)
+        db.add(db_embedding)
+        db.commit()
+    except Exception as e:
+        logger.error(f"Error generating embedding: {e}")
+    finally:
+        db.close() 

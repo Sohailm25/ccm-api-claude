@@ -1,22 +1,39 @@
 from sentence_transformers import SentenceTransformer
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from database import Entry, Embedding
+from database import Entry, Embedding, convert_to_pg_vector
 from typing import List, Dict, Any
 import logging
 
 # Load a smaller model
 model = SentenceTransformer('paraphrase-MiniLM-L3-v2')  # 61MB vs 90MB for all-MiniLM-L6-v2
 
-def get_embedding(text: str) -> List[float]:
-    """Generate an embedding for the given text"""
-    return model.encode(text).tolist()
+def get_embedding(text):
+    """Generate a vector embedding for the given text"""
+    try:
+        # Old API might be using: embedding_vector = model.encode(text, embedding=...)
+        embedding_vector = model.encode(text)
+        
+        # Convert to proper format for pgvector
+        # Ensure the embedding is properly formatted for pgvector
+        if isinstance(embedding_vector, list):
+            return embedding_vector
+        return embedding_vector.tolist()
+        
+    except Exception as e:
+        logger.error(f"Error generating embedding: {str(e)}")
+        return None
 
 def search_entries(db: Session, query: str, limit: int = 5) -> List[Dict[str, Any]]:
     """Perform semantic search using vector similarity"""
     query_embedding = get_embedding(query)
     
     try:
+        # Use the convert_to_pg_vector function for consistency
+        query_embedding = convert_to_pg_vector(query_embedding)
+        if query_embedding is None:
+            raise ValueError("Failed to generate valid embedding for search query")
+        
         # Convert embedding to string format PostgreSQL understands
         embedding_str = str(query_embedding).replace('[', '{').replace(']', '}')
         

@@ -94,12 +94,68 @@ def get_weekly_rollup_response(entries: List[dict]) -> str:
         Here are the entries:
         {entries_text}
         
-        Please provide:
-        1. A summary of key themes and topics across these entries
-        2. Interesting connections or patterns between different pieces of content
-        3. Questions these entries raise that might be worth exploring further
+        Please reference the format below when constructing your response:
+
+        # 🗓️ Weekly Resource Collection
+            February 15, 2025
+
+            ## 🤖 AI Development & Tools
+
+            ### 🤝 AI Agents & Architecture
+            - [2025 AI Agent Market Map](https://x.com/atomsilverman/status/1890534522560663806?s=46) - Comprehensive overview of AI agent landscape
+            - [Proxy 1.0 Release](https://x.com/ai_for_success/status/1892137785420833273?s=46) - Convergence's new web agent
+            - [Multi-agent AI Framework](https://x.com/sumanth_077/status/1891491497121354128?s=46) - Framework for multi-agent systems
+            - [AI Agent Memory Systems](https://x.com/aurimas_gr/status/1892196166973977034?s=46) - Discussion of agent memory capabilities
+            - [Native Sparse Attention Research](https://x.com/deepseek_ai/status/1891745487071609327?s=46) - New LLM architecture with performance improvements
+            - [MUSE by Microsoft](https://x.com/_akhaliq/status/1892263116496400859?s=46) - Generative AI for gameplay
+
+            ### 🛠️ Development Tools & Resources
+            - [VSCode Sidebar Configuration](https://x.com/aidenybai/status/1890457226340700361?s=46) - Right-sided folder sidebar optimization
+            - [Cursor/Windsurf Context Tip](https://x.com/cj_zzzz/status/1892615770040877494?s=46) - Reducing AI coding errors
+            - [Cloud Computing Credits](https://x.com/brennanwoodruff/status/1892222642326839400?s=46) - Free credits from major providers
+
+            ## 🔍 Research & Knowledge Management
+
+            ### 📚 Research Tools
+            - [Rabbit Hole App](https://x.com/mohams2001/status/1890103682630406403?s=46) - Tool for exploring follow-up questions
+            - [Deep Research Prompting](https://x.com/buccocapital/status/1890745551995424987?s=46) - Meta-approach using O1 Pro for research
+            - [Knowledge Graphs](https://x.com/svpino/status/1891488282040750344?s=46) - Knowledge organization systems
+            - [Open Source Knowledge Management](https://x.com/tom_doerr/status/1891966398588387598?s=46) - Software solutions
+
+            ### 📄 Document Processing
+            - [PDF Content Extraction](https://x.com/rohanpaul_ai/status/1890552874155090388?s=46) - PDF processing tools
+            - [PDF Analyzer](https://x.com/tom_doerr/status/1890346811350470989?s=46) - PDF analysis capabilities
+
+            ## 📖 Learning & Education
+
+            ### 💻 Technical Education
+            - [Compiler Learning Resource](https://ssloy.github.io/tinycompiler/) - "A compiler in a week-end"
+            - [Twitter Discussion](https://x.com/ludwigabap/status/1892500346833936779?s=46) - Compiler learning overview
+            - [LLM Learning Roadmap](https://x.com/jxmnop/status/1890826135203717427?s=46) - Comprehensive path from basics to advanced AI
+
+            ### 🧠 Personal Development
+            - [Self-Discipline vs. Psychological Needs](https://youtu.be/V6hN8raThYk?si=su3gJLgRBzFt5Rwa) - Video on behavioral patterns
+            - [Time Management System](https://youtu.be/VpN78TXMSUM?si=8FbaHQSD1ItfxfHb) - Ali Abdaal's productivity approach
+
+            ## 📝 Content Creation & Communication
+            - [Social Media Post Checklist](https://x.com/thepatwalls/status/1890798723342426144?s=46) - Framework for engaging content
+            - [AI Content Automation](https://x.com/juliangoldieseo/status/1892439039627972640?s=46) - Multi-agent content system
+            - [Effective Prompt Design](https://x.com/aakashg0/status/1890492955842007087?s=46) - Anatomy of an o1 prompt
+            - [Prompting as Programming](https://x.com/mckaywrigley/status/1891925465062887524?s=46) - Conceptual framework for prompting
+
+            ## 🧪 AI Theory & Research
+            - [LLM Architecture Innovation](https://x.com/matthewberman/status/1890081482104008920?s=46) - Reasoning in latent space
+            - [Grokking Research Paper](http://arxiv.org/abs/2412.18624) - Thermodynamic approach to understanding AI learning
+            - [AI Implementation Insights](https://x.com/ztc1/status/1890888408047984926?s=46) - Practical AI integration strategies
+
+            ## ✅ Personal ToDos
+            - Try VSCode with right-sided folder sidebar at Wendy's/Chase
+            - Explore Cursor as alternative IDE
+            - Evaluate IDE setup feasibility at work
+            - Check out Rabbit Hole app functionality
+            - Consider how Rabbit Hole might fit into current research workflow
         
-        Focus on being insightful rather than just summarizing each entry individually.
+        Focus on being insightful rather than just summarizing each entry individually. Ensure that all links are provided. Use emojis in your headings!
         """
         
         if client is None:
