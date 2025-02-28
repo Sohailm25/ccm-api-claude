@@ -21,3 +21,4 @@ requests==2.31.0
 lxml[html_clean]
 # OR
 lxml_html_clean
+trafilatura==1.6.1
