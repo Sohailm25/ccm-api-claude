@@ -18,8 +18,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Fix newspaper3k and lxml compatibility issue
-RUN pip uninstall -y lxml && pip install lxml==4.9.3
+# Fix lxml and newspaper3k compatibility issues
+RUN pip uninstall -y lxml && pip install "lxml[html_clean]==4.9.3"
 RUN pip install --no-cache-dir newspaper3k==0.2.8
 RUN pip install --no-cache-dir youtube-transcript-api==0.6.1
 
@@ -29,11 +29,11 @@ RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTr
 # Copy application code
 COPY . .
 
-# Run the application
-CMD python -c "from database import create_tables; create_tables()" && uvicorn main:app --host 0.0.0.0 --port $PORT
+# Add trafilatura installation
+RUN pip install --no-cache-dir trafilatura
 
 # After installing requirements
 RUN pip install --no-cache-dir anthropic==0.8.1
 
-# Add trafilatura installation
-RUN pip install --no-cache-dir trafilatura 
+# Run the application
+CMD python -c "from database import create_tables; create_tables()" && uvicorn main:app --host 0.0.0.0 --port $PORT 
