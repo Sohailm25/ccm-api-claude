@@ -20,6 +20,8 @@ import requests
 from bs4 import BeautifulSoup
 import traceback
 import trafilatura
+import anthropic
+from content_processor import format_and_summarize_content
 
 from database import get_db, Entry, Embedding, SessionLocal, reset_db_connection
 from embeddings import get_embedding, search_entries
@@ -28,7 +30,7 @@ from claude_integration import get_search_response, get_weekly_rollup_response, 
 # Import from new config module
 from config import (
     API_KEY, API_KEY_NAME, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW,
-    EXTRACTION_TIMEOUT, MAX_CONTENT_LENGTH, LOG_LEVEL
+    EXTRACTION_TIMEOUT, MAX_CONTENT_LENGTH, LOG_LEVEL, ANTHROPIC_API_KEY
 )
 
 # Setup logging
@@ -592,3 +594,16 @@ def test_extract(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+try:
+    # Initialize the Anthropic client with compatible settings
+    anthropic_client = anthropic.Anthropic(
+        api_key=ANTHROPIC_API_KEY,
+        # Remove socket_options if present
+    )
+    # Log success
+    logger.info("Anthropic client initialized successfully")
+except Exception as e:
+    logger.error(f"Failed to initialize Anthropic client: {str(e)}")
+    logger.error("Claude integration will not be available")
+    anthropic_client = None
