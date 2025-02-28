@@ -377,34 +377,104 @@ async def startup_db_client():
         # Don't raise here - let the app start and fail gracefully
 
 def extract_with_bs4(url):
-    """Extract content without using newspaper3k"""
+    """Extract content from URLs with appropriate handler for each type"""
+    # Handle Twitter/X.com links
+    if "twitter.com" in url or "x.com" in url:
+        return {
+            "content": "",  # Empty content field for Twitter/X
+            "title": "Twitter/X Post",
+            "success": True
+        }
+        
+    # Handle YouTube URLs using youtube-transcript-api
+    if is_youtube_url(url):
+        try:
+            summary = get_youtube_transcript_summary(url)
+            return {
+                "content": summary,
+                "title": "YouTube Video Summary",
+                "success": True
+            }
+        except Exception as e:
+            logger.error(f"YouTube extraction failed: {e}")
+            return {
+                "content": "Failed to extract YouTube transcript.",
+                "title": "YouTube Video",
+                "success": False
+            }
+    
+    # For regular websites, use BeautifulSoup or Trafilatura
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
-    response = requests.get(url, headers=headers, timeout=15)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # Get title
-    title = soup.title.string if soup.title else url
-    
-    # Extract content
-    content = ""
-    for tag in ['article', 'main', '.content', '#content', 'div.post', 'div.entry']:
-        elements = soup.select(tag)
-        if elements:
-            content = elements[0].get_text(separator='\n', strip=True)
-            break
-    
-    # Fallback to body if no specific content container found
-    if not content and soup.body:
-        content = soup.body.get_text(separator='\n', strip=True)
-    
-    return {
-        "content": content,
-        "title": title,
-        "success": True if content else False
-    }
+    try:
+        # Try with Trafilatura first (if available)
+        try:
+            import trafilatura
+            downloaded = trafilatura.fetch_url(url)
+            if downloaded:
+                content = trafilatura.extract(downloaded)
+                if content and len(content.strip()) > 100:
+                    metadata = trafilatura.extract_metadata(downloaded)
+                    title = metadata.title if metadata and metadata.title else url
+                    
+                    # Process with Claude if needed
+                    if len(content) > 100:
+                        processed_content = format_and_summarize_content(content, url, title)
+                        return {
+                            "content": processed_content,
+                            "title": title,
+                            "success": True
+                        }
+                    return {
+                        "content": content,
+                        "title": title,
+                        "success": True
+                    }
+        except Exception as trafilatura_error:
+            logger.info(f"Trafilatura extraction failed, falling back to BeautifulSoup: {trafilatura_error}")
+        
+        # Fall back to BeautifulSoup
+        response = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Get title
+        title = soup.title.string if soup.title else url
+        
+        # Extract content
+        content = ""
+        for tag in ['article', 'main', '.content', '#content', 'div.post', 'div.entry']:
+            elements = soup.select(tag)
+            if elements:
+                content = elements[0].get_text(separator='\n', strip=True)
+                break
+        
+        # Fallback to body if no specific content container found
+        if not content and soup.body:
+            content = soup.body.get_text(separator='\n', strip=True)
+            
+        # If we extracted content, process it with Claude
+        if content and len(content) > 100:
+            processed_content = format_and_summarize_content(content, url, title)
+            return {
+                "content": processed_content,
+                "title": title,
+                "success": True
+            }
+            
+        return {
+            "content": content,
+            "title": title,
+            "success": bool(content)
+        }
+    except Exception as e:
+        logger.error(f"Extraction error for {url}: {e}")
+        return {
+            "content": f"Extraction failed: {str(e)}",
+            "title": url,
+            "success": False
+        }
 
 @app.post("/extract", response_model=EntryResponse)
 def create_from_url(
@@ -431,9 +501,14 @@ def create_from_url(
     # Extract content from URL
     extraction = extract_with_bs4(url)
     
-    # Create entry with extracted content or a placeholder if extraction failed
+    # For Twitter/X, we might want empty content but set thoughts if not provided
+    if ("twitter.com" in url or "x.com" in url) and not thoughts:
+        auto_thoughts = "Twitter/X Post"
+    else:
+        auto_thoughts = f"Auto-extracted from {extraction['title']}"
+    
+    # Create entry with extracted content
     content = extraction["content"]
-    auto_thoughts = f"Auto-extracted from {extraction['title']}"
     
     if not extraction["success"]:
         content = "[Content extraction failed]"
@@ -449,8 +524,7 @@ def create_from_url(
     db.commit()
     db.refresh(db_entry)
     
-    # Generate embedding in background (even for failed extractions)
-    # This will use whatever content we have plus thoughts for search
+    # Generate embedding in background
     background_tasks.add_task(
         generate_and_store_embedding, 
         db_entry.id, 

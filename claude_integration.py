@@ -11,16 +11,33 @@ import re
 load_dotenv()
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+client = None
+USING_NEW_CLIENT = False
 
-# Fix for different Anthropic SDK versions
+# Better detection of Anthropic client version
 try:
-    # Try newer client format (v0.5.0+)
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    USING_NEW_CLIENT = True
-except Exception:
+    # Try to initialize the newer client format
+    temp_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    
+    # Test if it has the messages attribute
+    if hasattr(temp_client, 'messages'):
+        client = temp_client
+        USING_NEW_CLIENT = True
+        logging.info("Using new Anthropic client with messages API")
+    else:
+        # It has the new class name but old API
+        client = anthropic.Client(api_key=ANTHROPIC_API_KEY)
+        USING_NEW_CLIENT = False
+        logging.info("Using older Anthropic client API")
+except Exception as e:
     # Fall back to older client format
-    client = anthropic.Client(api_key=ANTHROPIC_API_KEY)
-    USING_NEW_CLIENT = False
+    logging.warning(f"Error initializing new Anthropic client: {e}")
+    try:
+        client = anthropic.Client(api_key=ANTHROPIC_API_KEY)
+        USING_NEW_CLIENT = False
+        logging.info("Fallback to older Anthropic client")
+    except Exception as e2:
+        logging.error(f"Failed to initialize any Anthropic client: {e2}")
 
 def get_search_response(query: str, entries: List[dict]) -> str:
     """Generate a response from Claude for a search query"""
@@ -93,15 +110,16 @@ def get_weekly_rollup_response(entries: List[dict]) -> str:
         Focus on being insightful rather than just summarizing each entry individually.
         """
         
-        # Call Claude with appropriate API version
-        if USING_NEW_CLIENT:
+        if USING_NEW_CLIENT and hasattr(client, 'messages'):
+            # Double-check the client has messages attribute
             response = client.messages.create(
-                model="claude-3-7-sonnet-20250219",
+                model="claude-3-sonnet-20240229",  # Use a known stable model
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
             return response.content[0].text
         else:
+            # Use the older client format
             response = client.completion(
                 prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
                 max_tokens_to_sample=1500,
@@ -116,7 +134,7 @@ def get_weekly_rollup_response(entries: List[dict]) -> str:
 def is_youtube_url(url: str) -> bool:
     """Check if a URL is a YouTube video."""
     youtube_regex = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})'
-    match = re.match(youtube_regex, url)
+    match = re.search(youtube_regex, url)
     return bool(match)
 
 def extract_youtube_id(url: str) -> str:
@@ -137,22 +155,28 @@ def get_youtube_transcript_summary(url: str) -> str:
         
         # Get the transcript
         try:
+            # Try to get English transcript first
             transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
             full_transcript = " ".join([item['text'] for item in transcript_list])
         except Exception as e:
             # Try to get any available language if English fails
             try:
                 transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
-                # Get the first available transcript
-                first_transcript = next(transcript_list._manually_created_transcripts.values().__iter__(), None)
-                if not first_transcript:
-                    first_transcript = next(transcript_list._generated_transcripts.values().__iter__(), None)
-                if first_transcript:
-                    transcript = first_transcript.fetch()
-                    full_transcript = " ".join([item['text'] for item in transcript])
-                else:
-                    return "No transcript available for this video."
-            except Exception:
+                
+                # Try manually created transcripts first
+                try:
+                    first_transcript = list(transcript_list._manually_created_transcripts.values())[0]
+                except (IndexError, AttributeError):
+                    # Then try auto-generated transcripts
+                    try:
+                        first_transcript = list(transcript_list._generated_transcripts.values())[0]
+                    except (IndexError, AttributeError):
+                        return "No transcript available for this video."
+                
+                transcript = first_transcript.fetch()
+                full_transcript = " ".join([item['text'] for item in transcript])
+            except Exception as e2:
+                logging.error(f"Failed to get any transcript: {e2}")
                 return "No transcript available for this video."
         
         # Truncate if very long (Claude has context limits)
@@ -171,15 +195,22 @@ def get_youtube_transcript_summary(url: str) -> str:
         """
         
         # Get Claude's summary
-        response = client.messages.create(
-            model="claude-3-7-sonnet-20250219",
-            max_tokens=500,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        summary = response.content[0].text
+        if USING_NEW_CLIENT and hasattr(client, 'messages'):
+            response = client.messages.create(
+                model="claude-3-sonnet-20240229",
+                max_tokens=500,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            summary = response.content[0].text
+        else:
+            response = client.completion(
+                prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
+                max_tokens_to_sample=500,
+                model="claude-3-sonnet-20240229"
+            )
+            summary = response.completion
         
         # Add a header to clarify this is an AI summary
         return f"## AI-Generated Summary of YouTube Video\n\n{summary}"
@@ -187,4 +218,60 @@ def get_youtube_transcript_summary(url: str) -> str:
     except Exception as e:
         # Generic exception handling instead of specific types
         logging.error(f"Error extracting YouTube transcript: {e}")
-        return f"Failed to extract and summarize YouTube transcript: {str(e)}" 
+        return f"Failed to extract and summarize YouTube transcript: {str(e)}"
+
+def format_and_summarize_content(content, url, title):
+    """Use Claude to format content and extract key points"""
+    try:
+        # Truncate if very long
+        if len(content) > 30000:
+            content = content[:30000] + "... [content truncated due to length]"
+        
+        prompt = f"""
+        I need you to process this extracted web content from "{title}" ({url}).
+        
+        First, reformat the text to be more readable, fixing any extraction artifacts or formatting issues.
+        
+        Then, summarize the 3 most important points from this content in exactly 3 sentences.
+        
+        Format your response like this:
+        
+        ## Formatted Content
+        
+        [Properly formatted content here]
+        
+        ## Key Points
+        
+        1. [First key point in one sentence]
+        2. [Second key point in one sentence]
+        3. [Third key point in one sentence]
+        
+        Here's the extracted content:
+        
+        {content}
+        """
+        
+        # Call Claude with appropriate API version
+        if USING_NEW_CLIENT:
+            response = client.messages.create(
+                model="claude-3-7-sonnet-20250219",
+                max_tokens=35000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text
+        else:
+            response = client.completion(
+                prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
+                max_tokens_to_sample=35000,
+                model="claude-3-sonnet-20240229"
+            )
+            return response.completion
+            
+    except Exception as e:
+        logging.error(f"Error processing content with Claude: {e}")
+        # Return original content if Claude processing fails
+        return f"""
+        {content}
+        
+        [Claude processing failed: {str(e)}]
+        """ 
