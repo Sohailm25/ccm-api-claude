@@ -1,26 +1,4 @@
 import logging
-try:
-    import fix_imports  # Apply import workaround
-except ImportError:
-    # Create the fix on the fly if the file doesn't exist
-    import sys
-    import types
-    
-    # Create dummy lxml.html.clean module
-    dummy_module = types.ModuleType("lxml.html.clean")
-    
-    # Add a dummy Cleaner class
-    class Cleaner:
-        def __init__(self, **kwargs):
-            pass
-        def clean_html(self, html):
-            return html
-    
-    dummy_module.Cleaner = Cleaner
-    
-    # Insert the dummy module
-    sys.modules["lxml.html.clean"] = dummy_module
-    logging.warning("Created inline lxml.html.clean workaround")
 
 from fastapi import FastAPI, Depends, HTTPException, Security, status, Request, BackgroundTasks, Body
 from fastapi.security.api_key import APIKeyHeader, APIKey
@@ -37,14 +15,21 @@ import sqlalchemy
 import requests
 from bs4 import BeautifulSoup
 import traceback
+import trafilatura
 
 from database import get_db, Entry, Embedding, SessionLocal, reset_db_connection
 from embeddings import get_embedding, search_entries
 from claude_integration import get_search_response, get_weekly_rollup_response, get_youtube_transcript_summary, is_youtube_url
 
+# Import from new config module
+from config import (
+    API_KEY, API_KEY_NAME, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW,
+    EXTRACTION_TIMEOUT, MAX_CONTENT_LENGTH, LOG_LEVEL
+)
+
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL),
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler()]
 )
@@ -52,8 +37,6 @@ logger = logging.getLogger("api")
 
 load_dotenv()
 
-API_KEY = os.getenv("API_KEY")
-API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 app = FastAPI(
@@ -411,7 +394,6 @@ def extract_with_bs4(url):
     try:
         # Try with Trafilatura first (if available)
         try:
-            import trafilatura
             downloaded = trafilatura.fetch_url(url)
             if downloaded:
                 content = trafilatura.extract(downloaded)
@@ -490,48 +472,68 @@ def create_from_url(
     Create a new entry by automatically extracting content from a URL.
     Accepts parameters either as query parameters or in the request body.
     """
-    # Use request_data if provided, otherwise use query parameters
-    if request_data:
-        url = request_data.url
-        thoughts = request_data.thoughts or thoughts
-    
-    if not url:
-        raise HTTPException(status_code=400, detail="URL is required")
-    
-    # Extract content from URL
-    extraction = extract_with_bs4(url)
-    
-    # For Twitter/X, we might want empty content but set thoughts if not provided
-    if ("twitter.com" in url or "x.com" in url) and not thoughts:
-        auto_thoughts = "Twitter/X Post"
-    else:
-        auto_thoughts = f"Auto-extracted from {extraction['title']}"
-    
-    # Create entry with extracted content
-    content = extraction["content"]
-    
-    if not extraction["success"]:
-        content = "[Content extraction failed]"
-        auto_thoughts = f"Failed to extract content from {url}"
-    
-    db_entry = Entry(
-        url=url, 
-        content=content,
-        thoughts=thoughts if thoughts else auto_thoughts
-    )
-    
-    db.add(db_entry)
-    db.commit()
-    db.refresh(db_entry)
-    
-    # Generate embedding in background
-    background_tasks.add_task(
-        generate_and_store_embedding, 
-        db_entry.id, 
-        content + " " + db_entry.thoughts
-    )
-    
-    return db_entry
+    try:
+        # Use request_data if provided, otherwise use query parameters
+        if request_data:
+            url = request_data.url
+            thoughts = request_data.thoughts or thoughts
+        
+        if not url:
+            raise HTTPException(status_code=400, detail="URL is required")
+        
+        # Extract content from URL
+        extraction = extract_with_bs4(url)
+        
+        # For Twitter/X, we might want empty content but set thoughts if not provided
+        if ("twitter.com" in url or "x.com" in url) and not thoughts:
+            auto_thoughts = "Twitter/X Post"
+        else:
+            auto_thoughts = f"Auto-extracted from {extraction['title']}"
+        
+        # Create entry with extracted content
+        content = extraction["content"]
+        
+        if not extraction["success"]:
+            content = "[Content extraction failed]"
+            auto_thoughts = f"Failed to extract content from {url}"
+        
+        try:
+            db_entry = Entry(
+                url=url, 
+                content=content,
+                thoughts=thoughts if thoughts else auto_thoughts
+            )
+            
+            db.add(db_entry)
+            db.commit()
+            db.refresh(db_entry)
+            
+            # Generate embedding in background
+            background_tasks.add_task(
+                generate_and_store_embedding, 
+                db_entry.id, 
+                content + " " + db_entry.thoughts
+            )
+            
+            return db_entry
+            
+        except sqlalchemy.exc.SQLAlchemyError as e:
+            db.rollback()
+            logger.error(f"Database error in create_from_url: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Database error occurred while saving the entry"
+            )
+            
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in create_from_url: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected error occurred: {str(e)}"
+        )
 
 @app.get("/test-extract")
 def test_extract(
@@ -545,18 +547,10 @@ def test_extract(
     start_time = time.time()
     
     try:
-        # Skip newspaper3k test since we're removing it
-        newspaper_result = {
-            "success": False, 
-            "error": "Newspaper3k disabled due to compatibility issues", 
-            "title": None, 
-            "content_length": 0
-        }
-        
-        # Try with BeautifulSoup (keep this part)
+        # Try with BeautifulSoup
         bs_result = {"success": False, "error": None, "title": None, "content_length": 0}
         try:
-            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=EXTRACTION_TIMEOUT)
             soup = BeautifulSoup(response.text, 'html.parser')
             content = ""
             title = soup.title.string if soup.title else url
@@ -582,22 +576,9 @@ def test_extract(
         # Complete result using our custom function
         extraction = extract_with_bs4(url)
         
-        # Check if it's a YouTube URL
-        if is_youtube_url(url):
-            try:
-                youtube_result = {
-                    "success": True,
-                    "content": get_youtube_transcript_summary(url),
-                    "title": "YouTube Video"
-                }
-                extraction = youtube_result
-            except Exception as e:
-                logger.error(f"YouTube extraction failed: {e}")
-        
         # Return results
         return {
             "url": url,
-            "newspaper3k_test": newspaper_result,  # Just return the disabled message
             "beautifulsoup_test": bs_result,
             "combined_result": extraction,
             "processing_time_ms": round((time.time() - start_time) * 1000, 2),

@@ -1,3 +1,7 @@
+"""
+Claude AI integration module.
+"""
+
 import os
 import anthropic
 from typing import List
@@ -8,36 +12,25 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api import TranscriptsDisabled, NoTranscriptFound
 import re
 
+# Import from config
+from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_CONTENT_LENGTH, LOG_LEVEL
+
 load_dotenv()
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-client = None
-USING_NEW_CLIENT = False
+# Setup logging
+logging.basicConfig(level=getattr(logging, LOG_LEVEL), format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("claude_integration")
 
-# Better detection of Anthropic client version
+# Initialize the Anthropic client
 try:
-    # Try to initialize the newer client format
-    temp_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    
-    # Test if it has the messages attribute
-    if hasattr(temp_client, 'messages'):
-        client = temp_client
-        USING_NEW_CLIENT = True
-        logging.info("Using new Anthropic client with messages API")
-    else:
-        # It has the new class name but old API
-        client = anthropic.Client(api_key=ANTHROPIC_API_KEY)
-        USING_NEW_CLIENT = False
-        logging.info("Using older Anthropic client API")
+    # Initialize with the latest client format
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    logger.info(f"Initialized Anthropic client with API key: {ANTHROPIC_API_KEY[:4]}...")
+    logger.info(f"Using Claude model: {CLAUDE_MODEL}")
 except Exception as e:
-    # Fall back to older client format
-    logging.warning(f"Error initializing new Anthropic client: {e}")
-    try:
-        client = anthropic.Client(api_key=ANTHROPIC_API_KEY)
-        USING_NEW_CLIENT = False
-        logging.info("Fallback to older Anthropic client")
-    except Exception as e2:
-        logging.error(f"Failed to initialize any Anthropic client: {e2}")
+    client = None
+    logger.error(f"Failed to initialize Anthropic client: {e}")
+    logger.error("Claude integration will not be available")
 
 def get_search_response(query: str, entries: List[dict]) -> str:
     """Generate a response from Claude for a search query"""
@@ -64,21 +57,20 @@ def get_search_response(query: str, entries: List[dict]) -> str:
         If the search results don't seem relevant to my query, please let me know.
         """
         
-        # Call Claude with appropriate API version
-        if USING_NEW_CLIENT:
+        if client is None:
+            return "Claude API is not available. Please check your API key and SDK installation."
+            
+        # Call Claude with the latest API format
+        try:
             response = client.messages.create(
-                model="claude-3-7-sonnet-20250219",
+                model=CLAUDE_MODEL,
                 max_tokens=1000,
                 messages=[{"role": "user", "content": prompt}]
             )
             return response.content[0].text
-        else:
-            response = client.completion(
-                prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
-                max_tokens_to_sample=1000,
-                model="claude-3-sonnet-20240229"
-            )
-            return response.completion
+        except Exception as e:
+            logging.error(f"Error calling Claude API: {e}")
+            return f"Error processing with Claude API: {str(e)}"
             
     except Exception as e:
         logging.error(f"Unexpected error in Claude integration: {e}")
@@ -110,40 +102,23 @@ def get_weekly_rollup_response(entries: List[dict]) -> str:
         Focus on being insightful rather than just summarizing each entry individually.
         """
         
-        if USING_NEW_CLIENT and hasattr(client, 'messages'):
-            # Double-check the client has messages attribute
+        if client is None:
+            return "Claude API is not available. Please check your API key and SDK installation."
+            
+        try:
             response = client.messages.create(
-                model="claude-3-sonnet-20240229",  # Use a known stable model
+                model=CLAUDE_MODEL,
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}]
             )
             return response.content[0].text
-        else:
-            # Use the older client format
-            response = client.completion(
-                prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
-                max_tokens_to_sample=1500,
-                model="claude-3-sonnet-20240229"
-            )
-            return response.completion
+        except Exception as e:
+            logging.error(f"Error calling Claude API: {e}")
+            return f"Error processing with Claude API: {str(e)}"
             
     except Exception as e:
         logging.error(f"Error generating weekly rollup: {e}")
         return f"I encountered an error while generating your weekly content rollup: {str(e)}"
-
-def is_youtube_url(url: str) -> bool:
-    """Check if a URL is a YouTube video."""
-    youtube_regex = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})'
-    match = re.search(youtube_regex, url)
-    return bool(match)
-
-def extract_youtube_id(url: str) -> str:
-    """Extract the YouTube video ID from a URL."""
-    youtube_regex = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})'
-    match = re.search(youtube_regex, url)
-    if match:
-        return match.group(1)
-    return None
 
 def get_youtube_transcript_summary(url: str) -> str:
     """Get a transcript for a YouTube video and summarize using Claude."""
@@ -194,26 +169,22 @@ def get_youtube_transcript_summary(url: str) -> str:
         {full_transcript}
         """
         
-        # Get Claude's summary
-        if USING_NEW_CLIENT and hasattr(client, 'messages'):
+        if client is None:
+            return "Claude API is not available. Please check your API key and SDK installation."
+            
+        try:
             response = client.messages.create(
-                model="claude-3-sonnet-20240229",
+                model=CLAUDE_MODEL,
                 max_tokens=500,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
+                messages=[{"role": "user", "content": prompt}]
             )
             summary = response.content[0].text
-        else:
-            response = client.completion(
-                prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
-                max_tokens_to_sample=500,
-                model="claude-3-sonnet-20240229"
-            )
-            summary = response.completion
-        
-        # Add a header to clarify this is an AI summary
-        return f"## AI-Generated Summary of YouTube Video\n\n{summary}"
+            
+            # Add a header to clarify this is an AI summary
+            return f"## AI-Generated Summary of YouTube Video\n\n{summary}"
+        except Exception as e:
+            logging.error(f"Error calling Claude API: {e}")
+            return f"Error processing with Claude API: {str(e)}"
         
     except Exception as e:
         # Generic exception handling instead of specific types
@@ -251,21 +222,27 @@ def format_and_summarize_content(content, url, title):
         {content}
         """
         
-        # Call Claude with appropriate API version
-        if USING_NEW_CLIENT:
+        if client is None:
+            return f"""
+            {content}
+            
+            [Claude API is not available. Please check your API key and SDK installation.]
+            """
+            
+        try:
             response = client.messages.create(
-                model="claude-3-7-sonnet-20250219",
+                model=CLAUDE_MODEL,
                 max_tokens=35000,
                 messages=[{"role": "user", "content": prompt}]
             )
             return response.content[0].text
-        else:
-            response = client.completion(
-                prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
-                max_tokens_to_sample=35000,
-                model="claude-3-sonnet-20240229"
-            )
-            return response.completion
+        except Exception as e:
+            logging.error(f"Error calling Claude API: {e}")
+            return f"""
+            {content}
+            
+            [Error processing with Claude API: {str(e)}]
+            """
             
     except Exception as e:
         logging.error(f"Error processing content with Claude: {e}")
@@ -274,4 +251,18 @@ def format_and_summarize_content(content, url, title):
         {content}
         
         [Claude processing failed: {str(e)}]
-        """ 
+        """
+
+def is_youtube_url(url: str) -> bool:
+    """Check if a URL is a YouTube video."""
+    youtube_regex = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})'
+    match = re.search(youtube_regex, url)
+    return bool(match)
+
+def extract_youtube_id(url: str) -> str:
+    """Extract the YouTube video ID from a URL."""
+    youtube_regex = r'(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})'
+    match = re.search(youtube_regex, url)
+    if match:
+        return match.group(1)
+    return None 
