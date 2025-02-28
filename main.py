@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 import sqlalchemy
 import requests
 from bs4 import BeautifulSoup
-from newspaper3k import Article
+from newspaper import Article
 
 from database import get_db, Entry, Embedding, SessionLocal
 from embeddings import get_embedding, search_entries
