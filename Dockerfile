@@ -22,6 +22,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip uninstall -y lxml && pip install lxml==4.9.3
 RUN pip install --no-cache-dir newspaper3k==0.2.8
 
+# Pre-download sentence transformers model to avoid timeout during startup
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
 # Copy application code
 COPY . .
 
