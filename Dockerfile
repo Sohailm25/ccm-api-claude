@@ -19,8 +19,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Fix lxml and newspaper3k compatibility issues
-RUN pip uninstall -y lxml && pip install "lxml[html_clean]==4.9.3"
-RUN pip install --no-cache-dir newspaper3k==0.2.8
+# RUN pip uninstall -y lxml && pip install "lxml[html_clean]==4.9.3"
+# RUN pip install --no-cache-dir newspaper3k==0.2.8
 RUN pip install --no-cache-dir youtube-transcript-api==0.6.1
 
 # Pre-download sentence transformers model to avoid timeout during startup

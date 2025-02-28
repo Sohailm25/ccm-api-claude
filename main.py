@@ -36,7 +36,6 @@ from dotenv import load_dotenv
 import sqlalchemy
 import requests
 from bs4 import BeautifulSoup
-from newspaper import Article
 import traceback
 
 from database import get_db, Entry, Embedding, SessionLocal, reset_db_connection
@@ -379,9 +378,6 @@ async def startup_db_client():
 
 def extract_with_bs4(url):
     """Extract content without using newspaper3k"""
-    import requests
-    from bs4 import BeautifulSoup
-    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
@@ -475,22 +471,15 @@ def test_extract(
     start_time = time.time()
     
     try:
-        # Try with newspaper3k
-        newspaper_result = {"success": False, "error": None, "title": None, "content_length": 0}
-        try:
-            article = Article(url)
-            article.download()
-            article.parse()
-            newspaper_result = {
-                "success": True,
-                "title": article.title,
-                "content_length": len(article.text),
-                "error": None
-            }
-        except Exception as e:
-            newspaper_result["error"] = str(e)
+        # Skip newspaper3k test since we're removing it
+        newspaper_result = {
+            "success": False, 
+            "error": "Newspaper3k disabled due to compatibility issues", 
+            "title": None, 
+            "content_length": 0
+        }
         
-        # Try with BeautifulSoup
+        # Try with BeautifulSoup (keep this part)
         bs_result = {"success": False, "error": None, "title": None, "content_length": 0}
         try:
             response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -516,12 +505,25 @@ def test_extract(
         except Exception as e:
             bs_result["error"] = str(e)
             
-        # Complete result
+        # Complete result using our custom function
         extraction = extract_with_bs4(url)
         
+        # Check if it's a YouTube URL
+        if is_youtube_url(url):
+            try:
+                youtube_result = {
+                    "success": True,
+                    "content": get_youtube_transcript_summary(url),
+                    "title": "YouTube Video"
+                }
+                extraction = youtube_result
+            except Exception as e:
+                logger.error(f"YouTube extraction failed: {e}")
+        
+        # Return results
         return {
             "url": url,
-            "newspaper3k_test": newspaper_result,
+            "newspaper3k_test": newspaper_result,  # Just return the disabled message
             "beautifulsoup_test": bs_result,
             "combined_result": extraction,
             "processing_time_ms": round((time.time() - start_time) * 1000, 2),
