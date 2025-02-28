@@ -11,49 +11,61 @@ import re
 load_dotenv()
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# Fix for different Anthropic SDK versions
+try:
+    # Try newer client format (v0.5.0+)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    USING_NEW_CLIENT = True
+except Exception:
+    # Fall back to older client format
+    client = anthropic.Client(api_key=ANTHROPIC_API_KEY)
+    USING_NEW_CLIENT = False
 
 def get_search_response(query: str, entries: List[dict]) -> str:
-    """Generate a response using Claude API for search results"""
+    """Generate a response from Claude for a search query"""
     try:
-        if not entries:
-            return "I couldn't find any relevant entries matching your query."
+        # Format entries for prompt
+        entries_text = ""
+        for i, entry in enumerate(entries, 1):
+            entries_text += f"\nEntry {i}:\nURL: {entry['url']}\nContent: {entry['content']}\nThoughts: {entry['thoughts']}\n"
         
-        # Format entries for Claude
-        entries_text = "\n\n".join([
-            f"Entry {i+1}:\nURL: {entry['url']}\nContent: {entry['content']}\n"
-            f"Thoughts: {entry['thoughts']}\nDate: {entry['created_at']}\n"
-            f"Similarity: {entry['similarity']:.2f}"
-            for i, entry in enumerate(entries)
-        ])
-        
+        # Create prompt
         prompt = f"""
-        The user searched for: "{query}"
+        I'd like you to help me understand the following content related to my search query.
         
-        Here are the top relevant entries found in their database:
+        My search query: {query}
         
+        Here are the top search results:
         {entries_text}
         
-        Please provide a helpful response summarizing these entries and explaining 
-        why they're relevant to the search query. If there are common themes, 
-        highlight them. If some entries are more relevant than others, explain why.
+        Please provide:
+        1. A concise summary of the relevant information from these results
+        2. Connections between the different pieces of content
+        3. Key insights these sources highlight about my query
+        
+        If the search results don't seem relevant to my query, please let me know.
         """
         
-        response = client.messages.create(
-            model="claude-3-7-sonnet-20250219",
-            max_tokens=1000,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-        
-        return response.content[0].text
-    except anthropic.APIError as e:
-        logging.error(f"Claude API error: {e}")
-        return "I encountered an issue while generating a response. Please try again later."
+        # Call Claude with appropriate API version
+        if USING_NEW_CLIENT:
+            response = client.messages.create(
+                model="claude-3-7-sonnet-20250219",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.content[0].text
+        else:
+            response = client.completion(
+                prompt=f"{anthropic.HUMAN_PROMPT} {prompt} {anthropic.AI_PROMPT}",
+                max_tokens_to_sample=1000,
+                model="claude-3-sonnet-20240229"
+            )
+            return response.completion
+            
     except Exception as e:
         logging.error(f"Unexpected error in Claude integration: {e}")
-        return "An unexpected error occurred while processing your search results."
+        return f"Sorry, I encountered an error while processing your request: {str(e)}"
 
 def get_weekly_rollup_response(entries: List, start_date: datetime, end_date: datetime) -> str:
     """Generate a weekly rollup response using Claude API"""

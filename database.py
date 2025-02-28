@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy.pool import QueuePool
 import sqlalchemy
+import logging
 
 load_dotenv()
 
@@ -47,13 +48,25 @@ class Embedding(Base):
 
 # Create tables
 def create_tables():
-    # Create the vector extension first
+    global engine
     with engine.connect() as conn:
-        conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector;"))
-        conn.commit()
-    
-    # Then create all tables
-    Base.metadata.create_all(bind=engine)
+        try:
+            # Create vector extension
+            conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector;"))
+            conn.commit()
+            logging.info("Vector extension created successfully")
+        except Exception as e:
+            logging.error(f"Error creating vector extension: {e}")
+            conn.rollback()
+            # Continue anyway - tables might still work
+            
+        try:
+            # Create tables
+            Base.metadata.create_all(bind=engine)
+            logging.info("Database tables created successfully")
+        except Exception as e:
+            logging.error(f"Error creating tables: {e}")
+            raise
 
 # Database session dependency
 def get_db():

@@ -221,40 +221,64 @@ def search_content(
 
 @app.get("/weekly-rollup", response_model=WeeklyRollupResponse)
 def get_weekly_rollup(
-    date: Optional[datetime] = None,
     db: Session = Depends(get_db),
     api_key: APIKey = Depends(get_api_key),
     _: bool = Depends(rate_limiter)
 ):
     """
-    Get a weekly rollup of entries from the past 7 days.
-    Returns Claude's summary of the week's content.
+    Return a weekly rollup of content with insights from Claude
     """
-    # Use provided date or current date
-    end_date = date or datetime.now()
-    
-    # Set end_date to end of day
-    end_date = end_date.replace(hour=23, minute=59, second=59)
-    
-    # Calculate start date (7 days before)
+    # Get current time and 7 days ago
+    end_date = datetime.now()
     start_date = end_date - timedelta(days=7)
-    start_date = start_date.replace(hour=0, minute=0, second=0)
     
-    # Query entries from the last 7 days
-    entries = db.query(Entry).filter(
-        Entry.created_at >= start_date,
-        Entry.created_at <= end_date
-    ).order_by(Entry.created_at.desc()).all()
+    # Query entries from the past week
+    try:
+        # Get entries from the past week
+        entries = db.query(Entry).filter(
+            Entry.created_date >= start_date,
+            Entry.created_date <= end_date
+        ).all()
+        
+        # If no entries, return a message
+        if not entries:
+            return WeeklyRollupResponse(
+                claude_response="No entries found for the past week.",
+                start_date=start_date,
+                end_date=end_date,
+                entries=[]
+            )
+        
+        # Convert entries to list of dicts for Claude
+        entries_for_claude = [
+            {
+                "id": entry.id,
+                "url": entry.url,
+                "content": entry.content,
+                "thoughts": entry.thoughts,
+                "created_at": entry.created_at
+            }
+            for entry in entries
+        ]
+        
+        # Get Claude's insights
+        claude_response = get_weekly_rollup_response(entries_for_claude)
+        
+        return WeeklyRollupResponse(
+            claude_response=claude_response,
+            start_date=start_date,
+            end_date=end_date,
+            entries=entries
+        )
     
-    # Get Claude's weekly rollup response
-    claude_response = get_weekly_rollup_response(entries, start_date, end_date)
-    
-    return {
-        "claude_response": claude_response,
-        "start_date": start_date,
-        "end_date": end_date,
-        "entries": entries
-    }
+    except Exception as e:
+        logging.error(f"Error in weekly rollup: {e}")
+        return WeeklyRollupResponse(
+            claude_response=f"Error generating weekly rollup: {str(e)}",
+            start_date=start_date,
+            end_date=end_date,
+            entries=[]
+        )
 
 @app.get("/health")
 def health_check():
