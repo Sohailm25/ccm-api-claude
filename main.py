@@ -10,10 +10,11 @@ import os
 import logging
 import time
 from dotenv import load_dotenv
+import sqlalchemy
 
 from database import get_db, Entry, Embedding, SessionLocal
 from embeddings import get_embedding, search_entries
-from claude_integration import get_search_response, get_weekly_rollup_response
+from claude_integration import get_search_response, get_weekly_rollup_response, get_youtube_transcript_summary, is_youtube_url
 
 # Setup logging
 logging.basicConfig(
@@ -31,7 +32,8 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 app = FastAPI(
     title="Content API",
-    description="API for storing and retrieving content with semantic search and Claude integration",
+    description="API for storing and retrieving content with semantic search and Claude integration. "
+                "Automatically extracts and summarizes YouTube transcripts when a YouTube URL is provided.",
     version="1.0.0"
 )
 
@@ -153,8 +155,26 @@ def create_entry(
     Store a new content entry with URL, content text, and thoughts.
     Also generates and stores a vector embedding for semantic search.
     """
+    url = str(entry.url)
+    content = entry.content
+    
+    # Check if this is a YouTube URL and content is empty or user wants auto-transcription
+    if (not content or "[auto-transcribe]" in content.lower()) and is_youtube_url(url):
+        try:
+            # Get transcript and summarize
+            logger.info(f"Extracting and summarizing YouTube transcript for {url}")
+            youtube_summary = get_youtube_transcript_summary(url)
+            
+            # Use the summary as content if we got one
+            if youtube_summary and not youtube_summary.startswith("Failed"):
+                content = youtube_summary
+                logger.info(f"Successfully extracted YouTube transcript for {url}")
+        except Exception as e:
+            logger.error(f"Error processing YouTube video: {e}")
+            # Continue with user-provided content if extraction fails
+    
     # Create entry
-    db_entry = Entry(url=str(entry.url), content=entry.content, thoughts=entry.thoughts)
+    db_entry = Entry(url=url, content=content, thoughts=entry.thoughts)
     db.add(db_entry)
     db.commit()
     db.refresh(db_entry)
@@ -163,7 +183,7 @@ def create_entry(
     background_tasks.add_task(
         generate_and_store_embedding, 
         db_entry.id, 
-        entry.content + " " + entry.thoughts
+        content + " " + entry.thoughts
     )
     
     return db_entry
@@ -245,6 +265,18 @@ def generate_and_store_embedding(entry_id: int, text: str):
         logger.error(f"Error generating embedding: {e}")
     finally:
         db.close()
+
+@app.on_event("startup")
+async def startup_db_client():
+    try:
+        from database import engine
+        # Test the connection
+        with engine.connect() as conn:
+            conn.execute(sqlalchemy.text("SELECT 1"))
+        logger.info("Successfully connected to the database")
+    except Exception as e:
+        logger.error(f"Failed to connect to the database: {e}")
+        # Don't raise here - let the app start and fail gracefully
 
 if __name__ == "__main__":
     import uvicorn
