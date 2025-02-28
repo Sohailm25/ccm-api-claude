@@ -10,7 +10,6 @@ from pgvector.sqlalchemy import Vector
 import sqlalchemy
 import logging
 import contextlib
-from embeddings import get_embedding
 
 # Import from config
 from config import DATABASE_URL, DB_POOL_SIZE, DB_MAX_OVERFLOW, DB_POOL_TIMEOUT, DB_POOL_RECYCLE, LOG_LEVEL
@@ -148,6 +147,8 @@ def generate_and_store_embedding(entry_id: int, text: str):
     try:
         # Create a new session for background task
         db = SessionLocal()
+        # Import here to avoid circular imports
+        from embeddings import get_embedding
         embedding_vector = get_embedding(text)
         # Convert to proper pgvector format
         pg_vector = convert_to_pg_vector(embedding_vector)
