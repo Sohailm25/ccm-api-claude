@@ -1,3 +1,27 @@
+import logging
+try:
+    import fix_imports  # Apply import workaround
+except ImportError:
+    # Create the fix on the fly if the file doesn't exist
+    import sys
+    import types
+    
+    # Create dummy lxml.html.clean module
+    dummy_module = types.ModuleType("lxml.html.clean")
+    
+    # Add a dummy Cleaner class
+    class Cleaner:
+        def __init__(self, **kwargs):
+            pass
+        def clean_html(self, html):
+            return html
+    
+    dummy_module.Cleaner = Cleaner
+    
+    # Insert the dummy module
+    sys.modules["lxml.html.clean"] = dummy_module
+    logging.warning("Created inline lxml.html.clean workaround")
+
 from fastapi import FastAPI, Depends, HTTPException, Security, status, Request, BackgroundTasks, Body
 from fastapi.security.api_key import APIKeyHeader, APIKey
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,7 +31,6 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel, HttpUrl
 import os
-import logging
 import time
 from dotenv import load_dotenv
 import sqlalchemy
@@ -354,116 +377,38 @@ async def startup_db_client():
         logger.error(f"Failed to connect to the database: {e}")
         # Don't raise here - let the app start and fail gracefully
 
-def extract_url_content(url: str) -> dict:
-    """Extract content from a URL and return a structured dictionary."""
-    try:
-        # Handle Twitter/X.com links
-        if "twitter.com" in url or "x.com" in url:
-            return {
-                "content": "This is a tweet. Refer to thoughts or visit link directly.",
-                "title": "Twitter/X Post",
-                "success": True
-            }
-            
-        # First check if it's a YouTube URL and handle accordingly
-        if is_youtube_url(url):
-            logger.info(f"Extracting YouTube transcript for {url}")
-            summary = get_youtube_transcript_summary(url)
-            return {
-                "content": summary,
-                "title": "YouTube Video Summary",
-                "success": True
-            }
-        
-        # Try Trafilatura first (you'd need to install this)
-        try:
-            import trafilatura
-            downloaded = trafilatura.fetch_url(url)
-            if downloaded:
-                content = trafilatura.extract(downloaded)
-                if content and len(content.strip()) > 100:
-                    metadata = trafilatura.extract_metadata(downloaded)
-                    title = metadata.title if metadata and metadata.title else url
-                    logger.info(f"Successfully extracted with Trafilatura: {title}")
-                    return {
-                        "content": content,
-                        "title": title,
-                        "success": True
-                    }
-        except Exception as te:
-            logger.error(f"Trafilatura extraction failed for {url}: {te}")
-        
-        # Fall back to newspaper3k
-        logger.info(f"Attempting to extract content from {url} using newspaper3k")
-        try:
-            article = Article(url)
-            article.download()
-            article.parse()
-            
-            # If it's an article, it might have a title and text
-            if article.text and len(article.text.strip()) > 100:
-                # Get title if available, otherwise use URL
-                title = article.title if article.title else url
-                logger.info(f"Successfully extracted content using newspaper3k: {title}")
-                return {
-                    "content": article.text,
-                    "title": title,
-                    "success": True
-                }
-        except Exception as ne:
-            logger.error(f"Newspaper3k extraction failed for {url}: {ne}")
-            # Continue to fallback
-            
-        # Fallback to basic HTML scraping if newspaper extraction isn't satisfactory
-        logger.info(f"Falling back to BeautifulSoup for {url}")
-        try:
-            response = requests.get(
-                url, 
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                },
-                timeout=15
-            )
-            response.raise_for_status()  # Check for HTTP errors
-            
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Extract the main text content, prioritizing article content
-            content = ""
-            
-            # Try to find the main content
-            for tag in ['article', 'main', 'div[role="main"]', '.content', '#content']:
-                main_content = soup.select(tag)
-                if main_content:
-                    content = main_content[0].get_text(separator='\n', strip=True)
-                    logger.info(f"Found content using selector: {tag}")
-                    break
-            
-            # If no specific content container found, get the body content
-            if not content:
-                logger.info("No content container found, extracting from body")
-                content = soup.body.get_text(separator='\n', strip=True)
-                
-            # Get title
-            title = soup.title.string if soup.title else url
-            
-            logger.info(f"Successfully extracted content using BeautifulSoup: {title}")
-            return {
-                "content": content,
-                "title": title,
-                "success": True
-            }
-        except requests.exceptions.RequestException as re:
-            logger.error(f"Request error for {url}: {re}")
-            raise
-            
-    except Exception as e:
-        logger.error(f"Error extracting content from URL {url}: {e}", exc_info=True)
-        return {
-            "content": f"[No content extracted] URL: {url}",
-            "title": url,
-            "success": False
-        }
+def extract_with_bs4(url):
+    """Extract content without using newspaper3k"""
+    import requests
+    from bs4 import BeautifulSoup
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
+    
+    response = requests.get(url, headers=headers, timeout=15)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # Get title
+    title = soup.title.string if soup.title else url
+    
+    # Extract content
+    content = ""
+    for tag in ['article', 'main', '.content', '#content', 'div.post', 'div.entry']:
+        elements = soup.select(tag)
+        if elements:
+            content = elements[0].get_text(separator='\n', strip=True)
+            break
+    
+    # Fallback to body if no specific content container found
+    if not content and soup.body:
+        content = soup.body.get_text(separator='\n', strip=True)
+    
+    return {
+        "content": content,
+        "title": title,
+        "success": True if content else False
+    }
 
 @app.post("/extract", response_model=EntryResponse)
 def create_from_url(
@@ -488,7 +433,7 @@ def create_from_url(
         raise HTTPException(status_code=400, detail="URL is required")
     
     # Extract content from URL
-    extraction = extract_url_content(url)
+    extraction = extract_with_bs4(url)
     
     # Create entry with extracted content or a placeholder if extraction failed
     content = extraction["content"]
@@ -572,7 +517,7 @@ def test_extract(
             bs_result["error"] = str(e)
             
         # Complete result
-        extraction = extract_url_content(url)
+        extraction = extract_with_bs4(url)
         
         return {
             "url": url,
