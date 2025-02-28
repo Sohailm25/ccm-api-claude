@@ -358,7 +358,7 @@ def extract_url_content(url: str) -> dict:
     except Exception as e:
         logging.error(f"Error extracting content from URL {url}: {e}")
         return {
-            "content": f"Failed to extract content from {url}: {str(e)}",
+            "content": f"[No content extracted] URL: {url}",
             "title": url,
             "success": False
         }
@@ -379,22 +379,30 @@ def create_from_url(
     # Extract content from URL
     extraction = extract_url_content(url)
     
-    # Create entry with extracted content
+    # Create entry with extracted content or a placeholder if extraction failed
+    content = extraction["content"]
+    auto_thoughts = f"Auto-extracted from {extraction['title']}"
+    
+    if not extraction["success"]:
+        content = "[Content extraction failed]"
+        auto_thoughts = f"Failed to extract content from {url}"
+    
     db_entry = Entry(
         url=url, 
-        content=extraction["content"],
-        thoughts=thoughts if thoughts else f"Auto-extracted from {extraction['title']}"
+        content=content,
+        thoughts=thoughts if thoughts else auto_thoughts
     )
     
     db.add(db_entry)
     db.commit()
     db.refresh(db_entry)
     
-    # Generate embedding in background
+    # Generate embedding in background (even for failed extractions)
+    # This will use whatever content we have plus thoughts for search
     background_tasks.add_task(
         generate_and_store_embedding, 
         db_entry.id, 
-        extraction["content"] + " " + db_entry.thoughts
+        content + " " + db_entry.thoughts
     )
     
     return db_entry

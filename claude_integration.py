@@ -5,7 +5,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 import logging
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api.exceptions import TranscriptsDisabled, NoTranscriptFound
+from youtube_transcript_api import TranscriptsDisabled, NoTranscriptFound
 import re
 
 load_dotenv()
@@ -213,10 +213,7 @@ def get_youtube_transcript_summary(url: str) -> str:
         # Add a header to clarify this is an AI summary
         return f"## AI-Generated Summary of YouTube Video\n\n{summary}"
         
-    except TranscriptsDisabled:
-        return "Transcripts are disabled for this YouTube video."
-    except NoTranscriptFound:
-        return "No transcript could be found for this YouTube video."
     except Exception as e:
+        # Generic exception handling instead of specific types
         logging.error(f"Error extracting YouTube transcript: {e}")
         return f"Failed to extract and summarize YouTube transcript: {str(e)}" 

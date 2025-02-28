@@ -4,8 +4,8 @@ from sqlalchemy import text
 from database import Entry, Embedding
 from typing import List, Dict, Any
 
-# Load the model once at module level
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Load a smaller model
+model = SentenceTransformer('paraphrase-MiniLM-L3-v2')  # 61MB vs 90MB for all-MiniLM-L6-v2
 
 def get_embedding(text: str) -> List[float]:
     """Generate an embedding for the given text"""
