@@ -17,3 +17,6 @@ youtube-transcript-api==0.6.1
 newspaper3k==0.2.8
 beautifulsoup4==4.12.2
 requests==2.31.0
+lxml[html_clean]
+# OR
+lxml_html_clean

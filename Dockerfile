@@ -19,6 +19,7 @@ RUN pip install --no-cache-dir youtube-transcript-api==0.6.1
 RUN pip install --no-cache-dir "anthropic>=0.18.0"
 RUN pip install --no-cache-dir "lxml[html_clean]>=4.9.3"
 RUN pip install --no-cache-dir trafilatura
+RUN pip install lxml[html_clean]
 
 # Pre-download sentence transformers model to avoid timeout during startup
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('paraphrase-MiniLM-L3-v2')"
