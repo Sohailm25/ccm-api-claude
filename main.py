@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Security, status, Request, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Security, status, Request, BackgroundTasks, Body
 from fastapi.security.api_key import APIKeyHeader, APIKey
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -144,6 +144,11 @@ async def generic_exception_handler(request, exc):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An unexpected error occurred. Please try again later."},
     )
+
+# Add this new model for extract endpoint
+class ExtractRequest(BaseModel):
+    url: str
+    thoughts: str = ""
 
 # Routes
 @app.post("/entries", response_model=EntryResponse)
@@ -365,8 +370,9 @@ def extract_url_content(url: str) -> dict:
 
 @app.post("/extract", response_model=EntryResponse)
 def create_from_url(
-    url: str,
+    url: str = None,
     thoughts: str = "",
+    request_data: ExtractRequest = None,
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(get_db),
     api_key: APIKey = Depends(get_api_key),
@@ -374,8 +380,16 @@ def create_from_url(
 ):
     """
     Create a new entry by automatically extracting content from a URL.
-    Only requires the URL and optional thoughts.
+    Accepts parameters either as query parameters or in the request body.
     """
+    # Use request_data if provided, otherwise use query parameters
+    if request_data:
+        url = request_data.url
+        thoughts = request_data.thoughts or thoughts
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+    
     # Extract content from URL
     extraction = extract_url_content(url)
     
