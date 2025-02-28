@@ -11,6 +11,9 @@ import logging
 import time
 from dotenv import load_dotenv
 import sqlalchemy
+import requests
+from bs4 import BeautifulSoup
+from newspaper3k import Article
 
 from database import get_db, Entry, Embedding, SessionLocal
 from embeddings import get_embedding, search_entries
@@ -277,6 +280,124 @@ async def startup_db_client():
     except Exception as e:
         logger.error(f"Failed to connect to the database: {e}")
         # Don't raise here - let the app start and fail gracefully
+
+def extract_url_content(url: str) -> dict:
+    """
+    Extract content from a URL and return a structured dictionary.
+    Works for general websites, news articles, and falls back to YouTube extraction when applicable.
+    """
+    try:
+        # First check if it's a YouTube URL and handle accordingly
+        if is_youtube_url(url):
+            summary = get_youtube_transcript_summary(url)
+            return {
+                "content": summary,
+                "title": "YouTube Video Summary",
+                "success": True
+            }
+        
+        # For general websites, use newspaper3k for extraction
+        article = Article(url)
+        article.download()
+        article.parse()
+        
+        # If it's an article, it might have a title and text
+        if article.text and len(article.text.strip()) > 100:
+            # Get title if available, otherwise use URL
+            title = article.title if article.title else url
+            return {
+                "content": article.text,
+                "title": title,
+                "success": True
+            }
+            
+        # Fallback to basic HTML scraping if newspaper extraction isn't satisfactory
+        response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Extract the main text content, prioritizing article content
+        content = ""
+        
+        # Try to find the main content
+        for tag in ['article', 'main', 'div[role="main"]', '.content', '#content']:
+            main_content = soup.select(tag)
+            if main_content:
+                content = main_content[0].get_text(separator='\n', strip=True)
+                break
+        
+        # If no specific content container found, get the body content
+        if not content:
+            content = soup.body.get_text(separator='\n', strip=True)
+            
+        # Get title
+        title = soup.title.string if soup.title else url
+            
+        # Use Claude to summarize if content is too long
+        if len(content) > 5000:
+            summary_prompt = f"""
+            Please summarize the following content from {url} in a concise way, 
+            preserving the key information and main points:
+            
+            {content[:10000]}  # Truncate if extremely long
+            """
+            
+            response = client.messages.create(
+                model="claude-3-7-sonnet-20250219",
+                max_tokens=1000,
+                messages=[{"role": "user", "content": summary_prompt}]
+            )
+            
+            content = f"## AI-Generated Summary from {title}\n\n{response.content[0].text}"
+            
+        return {
+            "content": content,
+            "title": title,
+            "success": True
+        }
+    
+    except Exception as e:
+        logging.error(f"Error extracting content from URL {url}: {e}")
+        return {
+            "content": f"Failed to extract content from {url}: {str(e)}",
+            "title": url,
+            "success": False
+        }
+
+@app.post("/extract", response_model=EntryResponse)
+def create_from_url(
+    url: str,
+    thoughts: str = "",
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(get_db),
+    api_key: APIKey = Depends(get_api_key),
+    _: bool = Depends(rate_limiter)
+):
+    """
+    Create a new entry by automatically extracting content from a URL.
+    Only requires the URL and optional thoughts.
+    """
+    # Extract content from URL
+    extraction = extract_url_content(url)
+    
+    # Create entry with extracted content
+    db_entry = Entry(
+        url=url, 
+        content=extraction["content"],
+        thoughts=thoughts if thoughts else f"Auto-extracted from {extraction['title']}"
+    )
+    
+    db.add(db_entry)
+    db.commit()
+    db.refresh(db_entry)
+    
+    # Generate embedding in background
+    background_tasks.add_task(
+        generate_and_store_embedding, 
+        db_entry.id, 
+        extraction["content"] + " " + db_entry.thoughts
+    )
+    
+    return db_entry
 
 if __name__ == "__main__":
     import uvicorn

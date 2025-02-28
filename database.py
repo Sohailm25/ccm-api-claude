@@ -6,6 +6,7 @@ from pgvector.sqlalchemy import Vector
 import os
 from dotenv import load_dotenv
 from sqlalchemy.pool import QueuePool
+import sqlalchemy
 
 load_dotenv()
 
@@ -46,6 +47,12 @@ class Embedding(Base):
 
 # Create tables
 def create_tables():
+    # Create the vector extension first
+    with engine.connect() as conn:
+        conn.execute(sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS vector;"))
+        conn.commit()
+    
+    # Then create all tables
     Base.metadata.create_all(bind=engine)
 
 # Database session dependency
