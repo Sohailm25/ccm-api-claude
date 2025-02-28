@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install specific packages
 RUN pip install --no-cache-dir youtube-transcript-api==0.6.1
 RUN pip install --no-cache-dir "anthropic>=0.18.0"
+RUN pip install --no-cache-dir "lxml[html_clean]>=4.9.3"
 RUN pip install --no-cache-dir trafilatura
 
 # Pre-download sentence transformers model to avoid timeout during startup

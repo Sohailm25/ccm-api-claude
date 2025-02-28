@@ -1,4 +1,8 @@
 import logging
+try:
+    import fix_imports  # This will apply the workaround if needed
+except ImportError:
+    logging.warning("fix_imports module not found, continuing without lxml.html.clean workaround")
 
 from fastapi import FastAPI, Depends, HTTPException, Security, status, Request, BackgroundTasks, Body
 from fastapi.security.api_key import APIKeyHeader, APIKey
@@ -386,55 +390,48 @@ def extract_with_bs4(url):
                 "success": False
             }
     
-    # For regular websites, use BeautifulSoup or Trafilatura
+    # For regular websites, try extraction methods
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
     }
     
     try:
-        # Try with Trafilatura first (if available)
-        try:
-            downloaded = trafilatura.fetch_url(url)
-            if downloaded:
-                content = trafilatura.extract(downloaded)
-                if content and len(content.strip()) > 100:
-                    metadata = trafilatura.extract_metadata(downloaded)
-                    title = metadata.title if metadata and metadata.title else url
-                    
-                    # Process with Claude if needed
-                    if len(content) > 100:
-                        processed_content = format_and_summarize_content(content, url, title)
-                        return {
-                            "content": processed_content,
-                            "title": title,
-                            "success": True
-                        }
-                    return {
-                        "content": content,
-                        "title": title,
-                        "success": True
-                    }
-        except Exception as trafilatura_error:
-            logger.info(f"Trafilatura extraction failed, falling back to BeautifulSoup: {trafilatura_error}")
-        
-        # Fall back to BeautifulSoup
-        response = requests.get(url, headers=headers, timeout=15)
+        # Try with simplified BeautifulSoup first, so we have a fallback
+        response = requests.get(url, headers=headers, timeout=EXTRACTION_TIMEOUT)
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Get title
         title = soup.title.string if soup.title else url
         
-        # Extract content
-        content = ""
-        for tag in ['article', 'main', '.content', '#content', 'div.post', 'div.entry']:
-            elements = soup.select(tag)
-            if elements:
-                content = elements[0].get_text(separator='\n', strip=True)
-                break
+        # Try with Trafilatura if available
+        trafilatura_content = None
+        try:
+            downloaded = trafilatura.fetch_url(url)
+            if downloaded:
+                trafilatura_content = trafilatura.extract(downloaded)
+                if trafilatura_content and len(trafilatura_content.strip()) > 100:
+                    metadata = trafilatura.extract_metadata(downloaded)
+                    if metadata and metadata.title:
+                        title = metadata.title
+        except Exception as trafilatura_error:
+            logger.info(f"Trafilatura extraction failed: {trafilatura_error}")
+            trafilatura_content = None
         
-        # Fallback to body if no specific content container found
-        if not content and soup.body:
-            content = soup.body.get_text(separator='\n', strip=True)
+        # If trafilatura worked, use that content
+        if trafilatura_content:
+            content = trafilatura_content
+        else:
+            # Extract content with BeautifulSoup
+            content = ""
+            for tag in ['article', 'main', '.content', '#content', 'div.post', 'div.entry']:
+                elements = soup.select(tag)
+                if elements:
+                    content = elements[0].get_text(separator='\n', strip=True)
+                    break
+            
+            # Fallback to body if no specific content container found
+            if not content and soup.body:
+                content = soup.body.get_text(separator='\n', strip=True)
             
         # If we extracted content, process it with Claude
         if content and len(content) > 100:
