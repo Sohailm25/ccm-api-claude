@@ -17,7 +17,10 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir newspaper3k
+
+# Fix newspaper3k and lxml compatibility issue
+RUN pip uninstall -y lxml && pip install lxml==4.9.3
+RUN pip install --no-cache-dir newspaper3k==0.2.8
 
 # Copy application code
 COPY . .
