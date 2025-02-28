@@ -22,7 +22,7 @@ DB_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "1800"))  # 30 minutes
 
 # Claude AI Configuration
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3.5-sonnet-20240620")
+CLAUDE_MODEL = "claude-3-7-sonnet-20250219"
 
 # Rate Limiting
 RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "10"))
